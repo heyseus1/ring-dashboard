@@ -6,6 +6,10 @@ This app lets you view Ring camera status, health metrics, snapshots, and local 
 
 It is designed for local/home-lab use.
 
+## Demo
+
+![Ring Dashboard Demo](docs/assets/ring-dashboard-demo.gif)
+
 ## What You Need
 
 - Docker Desktop
@@ -20,7 +24,7 @@ You do **not** need to install Node.js to run this with Docker.
 Clone the repo:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/ring-dashboard.git
+git clone https://github.com/heyseus1/ring-dashboard.git
 cd ring-dashboard
 ```
 
