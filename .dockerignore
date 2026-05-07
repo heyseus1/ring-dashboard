@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+.gitignore
+.env
+.ring-refresh-token
+.ring-activity-history.json
+data
+*.log
+README.md

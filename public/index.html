@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Ring Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Ring Security Dashboard</h1>
+          <p>Local camera status, snapshots, and activity history</p>
+        </div>
+
+        <div class="header-actions">
+          <button id="test-activity-button" class="secondary-button">
+            Add Synthetic Test
+          </button>
+          <button id="refresh-button">Refresh</button>
+        </div>
+      </header>
+
+      <section class="grid">
+        <article class="card">
+          <h2>System Health</h2>
+          <div id="health">Loading...</div>
+        </article>
+
+        <article class="card">
+          <h2>Camera Status</h2>
+          <div id="camera-status">Loading...</div>
+        </article>
+      </section>
+
+      <section id="snapshot-card" class="card hidden">
+        <div class="section-heading">
+          <div>
+            <h2>Camera Snapshot</h2>
+            <p id="snapshot-subtitle">Latest camera image</p>
+          </div>
+          <button id="close-snapshot-button" class="secondary-button">
+            Hide Snapshot
+          </button>
+        </div>
+
+        <div id="snapshot-status" class="snapshot-status"></div>
+        <img id="snapshot-image" class="snapshot-image" alt="Ring camera snapshot" />
+      </section>
+
+      <section class="card">
+        <h2>Activity History</h2>
+        <div id="activity-history">Loading...</div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,37 @@
+{
+  "name": "ring-dashboard",
+  "version": "1.0.0",
+  "description": "Local Ring camera dashboard for status, snapshots, and activity history",
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build && npm start",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist",
+    "docker:build": "docker build -t ring-dashboard:local .",
+    "docker:run": "docker run --rm -p 3000:3000 --env-file .env -v $(pwd)/data:/app/data ring-dashboard:local"
+  },
+  "keywords": [
+    "ring",
+    "dashboard",
+    "iot",
+    "camera",
+    "typescript",
+    "express"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "ring-client-api": "^14.3.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3"
+  }
+}

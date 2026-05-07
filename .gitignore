@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.ring-refresh-token
+.ring-activity-history.json
+data/*
+!data/.gitkeep
+*.log
