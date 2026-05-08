@@ -1,3 +1,11 @@
+let currentActivityFilter = "all";
+let lastDashboardData = {
+  health: null,
+  status: null,
+  activity: null,
+  snapshots: null,
+};
+
 async function getJson(url) {
   const response = await fetch(url);
 
@@ -41,6 +49,22 @@ function formatDate(value) {
   return new Date(value).toLocaleString();
 }
 
+function formatBytes(bytes) {
+  if (!bytes && bytes !== 0) {
+    return "Unknown";
+  }
+
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function formatPercent(value) {
   if (value === null || value === undefined) {
     return "Unknown";
@@ -76,7 +100,51 @@ function sourceBadgeClass(source) {
   }
 }
 
-function renderHealth(health) {
+function warningBadgeClass(severity) {
+  switch (severity) {
+    case "critical":
+      return "bad";
+    case "warning":
+      return "warning";
+    default:
+      return "";
+  }
+}
+
+function renderSummaryCards(health, status, snapshots) {
+  const element = document.getElementById("summary-cards");
+  const warningCount = status.warnings?.length || 0;
+  const latestCamera = status.cameras?.[0];
+  const latestStatus = latestCamera?.status;
+
+  element.innerHTML = `
+    <article class="summary-card">
+      <span class="summary-label">Cameras</span>
+      <strong>${escapeHtml(health.cameras)}</strong>
+      <small>${escapeHtml(health.locations)} location(s)</small>
+    </article>
+
+    <article class="summary-card">
+      <span class="summary-label">Connection</span>
+      <strong>${escapeHtml(latestStatus?.connectionStatus || "Unknown")}</strong>
+      <small>${escapeHtml(latestCamera?.name || "No camera")}</small>
+    </article>
+
+    <article class="summary-card">
+      <span class="summary-label">Snapshots</span>
+      <strong>${escapeHtml(snapshots.count)}</strong>
+      <small>${escapeHtml(health.snapshotRetentionDays)} day retention</small>
+    </article>
+
+    <article class="summary-card">
+      <span class="summary-label">Warnings</span>
+      <strong>${escapeHtml(warningCount)}</strong>
+      <small>${warningCount ? "Review warnings" : "Looks good"}</small>
+    </article>
+  `;
+}
+
+function renderHealth(health, status, snapshots) {
   const element = document.getElementById("health");
 
   element.innerHTML = `
@@ -87,7 +155,100 @@ function renderHealth(health) {
 
     <p><strong>Cameras:</strong> ${escapeHtml(health.cameras)}</p>
     <p><strong>Locations:</strong> ${escapeHtml(health.locations)}</p>
+    <p><strong>Activity Events:</strong> ${escapeHtml(status.totalActivityEvents)}</p>
+    <p><strong>Snapshots:</strong> ${escapeHtml(snapshots.count)}</p>
+    <p><strong>Retention:</strong> ${escapeHtml(health.snapshotRetentionDays)} days / ${escapeHtml(health.maxSnapshots)} max</p>
     <p><strong>Updated:</strong> ${escapeHtml(formatDate(health.timestamp))}</p>
+  `;
+}
+
+function renderWarnings(status) {
+  const element = document.getElementById("warnings");
+  const warnings = status.warnings || [];
+
+  if (!warnings.length) {
+    element.innerHTML = `
+      <div class="status-line">
+        <span class="badge good">Healthy</span>
+        <span>No dashboard warnings detected.</span>
+      </div>
+    `;
+    return;
+  }
+
+  element.innerHTML = `
+    <div class="warning-list">
+      ${warnings
+        .map(
+          (warning) => `
+            <div class="warning-item">
+              <span class="badge ${warningBadgeClass(warning.severity)}">
+                ${escapeHtml(warning.severity)}
+              </span>
+              <span>${escapeHtml(warning.message)}</span>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderRecentActivity(activityResponse) {
+  const element = document.getElementById("recent-activity");
+  const recent = activityResponse.activity.slice(0, 3);
+
+  if (!recent.length) {
+    element.innerHTML = `<p>No recent activity. Try <strong>Add Synthetic Test</strong>.</p>`;
+    return;
+  }
+
+  element.innerHTML = `
+    <div class="compact-list">
+      ${recent
+        .map(
+          (event) => `
+            <div class="compact-item">
+              <div>
+                <strong>${escapeHtml(event.eventType)}</strong>
+                <small>${escapeHtml(event.cameraName)} · ${escapeHtml(formatDate(event.receivedAt))}</small>
+              </div>
+              <span class="badge ${sourceBadgeClass(event.source)}">
+                ${escapeHtml(sourceLabel(event.source))}
+              </span>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderLatestSnapshot(snapshotResponse) {
+  const element = document.getElementById("latest-snapshot");
+  const latest = snapshotResponse.snapshots?.[0];
+
+  if (!latest) {
+    element.innerHTML = `<p>No snapshots saved yet.</p>`;
+    return;
+  }
+
+  element.innerHTML = `
+    <div class="latest-snapshot-preview">
+      <img src="${escapeHtml(latest.url)}?thumb=${Date.now()}" alt="${escapeHtml(latest.filename)}" />
+      <div>
+        <strong>${escapeHtml(latest.cameraName || "Unknown camera")}</strong>
+        <small>${escapeHtml(formatDate(latest.createdAt))}</small>
+        <button
+          class="small-button gallery-snapshot-button"
+          data-snapshot-url="${escapeHtml(latest.url)}"
+          data-camera-name="${escapeHtml(latest.cameraName || "Camera")}"
+          data-event-type="${escapeHtml(latest.eventType || "Snapshot")}"
+        >
+          Open
+        </button>
+      </div>
+    </div>
   `;
 }
 
@@ -120,18 +281,14 @@ function renderCameraStatus(status) {
                   cameraStatus.activeBattery === battery.slot ? " active" : "";
 
                 const details = [
-                  `Battery ${battery.slot}: ${formatPercent(
-                    battery.percentage
-                  )}`,
+                  `Battery ${battery.slot}: ${formatPercent(battery.percentage)}`,
                   battery.category ? battery.category : null,
                   battery.voltage ? `${battery.voltage} mV` : null,
                 ]
                   .filter(Boolean)
                   .join(" · ");
 
-                return `<div class="battery-line${active}">${escapeHtml(
-                  details
-                )}</div>`;
+                return `<div class="battery-line${active}">${escapeHtml(details)}</div>`;
               })
               .join("")
           : "Unknown";
@@ -141,47 +298,33 @@ function renderCameraStatus(status) {
           ? `<span class="badge good">Online</span>`
           : cameraStatus.connectionStatus === "Offline"
             ? `<span class="badge bad">Offline</span>`
-            : `<span class="badge">${escapeHtml(
-                cameraStatus.connectionStatus
-              )}</span>`;
+            : `<span class="badge">${escapeHtml(cameraStatus.connectionStatus)}</span>`;
 
       const wifi =
         cameraStatus.wifiSignal !== null
-          ? `${escapeHtml(cameraStatus.wifiSignal)} dBm (${escapeHtml(
-              cameraStatus.wifiQuality
-            )})`
+          ? `${escapeHtml(cameraStatus.wifiSignal)} dBm (${escapeHtml(cameraStatus.wifiQuality)})`
           : "Unknown";
 
-      const firmware = `${escapeHtml(
-        cameraStatus.firmwareVersion
-      )} <span class="muted">(${escapeHtml(
-        cameraStatus.firmwareStatus
-      )})</span>`;
+      const firmware = `${escapeHtml(cameraStatus.firmwareVersion)} <span class="muted">(${escapeHtml(cameraStatus.firmwareStatus)})</span>`;
 
       const packetLoss =
         cameraStatus.packetLoss !== null
-          ? `${escapeHtml(cameraStatus.packetLoss)}% (${escapeHtml(
-              cameraStatus.packetLossQuality
-            )})`
+          ? `${escapeHtml(cameraStatus.packetLoss)}% (${escapeHtml(cameraStatus.packetLossQuality)})`
           : "Unknown";
 
       const bandwidth =
         cameraStatus.currentBandwidthMbps !== null
-          ? `${escapeHtml(cameraStatus.currentBandwidthMbps)} Mbps (${escapeHtml(
-              cameraStatus.bandwidthQuality
-            )})`
+          ? `${escapeHtml(cameraStatus.currentBandwidthMbps)} Mbps (${escapeHtml(cameraStatus.bandwidthQuality)})`
           : "Unknown";
 
       return `
-        <div class="camera">
+        <div class="camera-card">
           <div class="camera-heading">
             <div>
               <h3>${escapeHtml(camera.name)}</h3>
               <p>${escapeHtml(camera.model || "Unknown model")}</p>
             </div>
-            <span class="badge">${escapeHtml(
-              camera.deviceType || "Unknown type"
-            )}</span>
+            <span class="badge">${escapeHtml(camera.deviceType || "Unknown type")}</span>
           </div>
 
           <div class="camera-actions">
@@ -194,102 +337,174 @@ function renderCameraStatus(status) {
             </button>
           </div>
 
-          ${renderMetricRow("Connection", connectionBadge)}
-          ${renderMetricRow("Battery", batteries)}
-          ${renderMetricRow("Power", escapeHtml(cameraStatus.powerStatus))}
-          ${renderMetricRow("Wi-Fi Signal", wifi)}
-          ${renderMetricRow(
-            "Wi-Fi Risk",
-            escapeHtml(cameraStatus.wifiRiskLevel || "Unknown")
-          )}
-          ${renderMetricRow("Network", escapeHtml(cameraStatus.networkName))}
-          ${renderMetricRow(
-            "Network Type",
-            escapeHtml(cameraStatus.networkConnection)
-          )}
-          ${renderMetricRow("Packet Loss", packetLoss)}
-          ${renderMetricRow("Bandwidth", bandwidth)}
-          ${renderMetricRow("Light", escapeHtml(cameraStatus.lightStatus))}
-          ${renderMetricRow("Siren", escapeHtml(cameraStatus.sirenStatus))}
-          ${renderMetricRow("Firmware", firmware)}
-          ${renderMetricRow(
-            "Motion Alerts",
-            escapeHtml(cameraStatus.motionAlerts)
-          )}
-          ${renderMetricRow(
-            "Motion Detection",
-            escapeHtml(cameraStatus.motionDetection)
-          )}
-          ${renderMetricRow("Recording", escapeHtml(cameraStatus.recordingStatus))}
-          ${renderMetricRow(
-            "Last Health Update",
-            escapeHtml(formatDate(cameraStatus.lastHealthUpdate))
-          )}
+          <div class="metric-grid">
+            ${renderMetricRow("Connection", connectionBadge)}
+            ${renderMetricRow("Battery", batteries)}
+            ${renderMetricRow("Power", escapeHtml(cameraStatus.powerStatus))}
+            ${renderMetricRow("Wi-Fi Signal", wifi)}
+            ${renderMetricRow("Wi-Fi Risk", escapeHtml(cameraStatus.wifiRiskLevel || "Unknown"))}
+            ${renderMetricRow("Network", escapeHtml(cameraStatus.networkName))}
+            ${renderMetricRow("Network Type", escapeHtml(cameraStatus.networkConnection))}
+            ${renderMetricRow("Packet Loss", packetLoss)}
+            ${renderMetricRow("Bandwidth", bandwidth)}
+            ${renderMetricRow("Light", escapeHtml(cameraStatus.lightStatus))}
+            ${renderMetricRow("Siren", escapeHtml(cameraStatus.sirenStatus))}
+            ${renderMetricRow("Firmware", firmware)}
+            ${renderMetricRow("Motion Alerts", escapeHtml(cameraStatus.motionAlerts))}
+            ${renderMetricRow("Motion Detection", escapeHtml(cameraStatus.motionDetection))}
+            ${renderMetricRow("Recording", escapeHtml(cameraStatus.recordingStatus))}
+            ${renderMetricRow("Last Health Update", escapeHtml(formatDate(cameraStatus.lastHealthUpdate)))}
+          </div>
         </div>
       `;
     })
     .join("");
 }
 
+function renderSnapshotCell(event) {
+  if (event.snapshotUrl) {
+    return `
+      <button
+        class="small-button activity-snapshot-button"
+        data-snapshot-url="${escapeHtml(event.snapshotUrl)}"
+        data-camera-name="${escapeHtml(event.cameraName)}"
+        data-event-type="${escapeHtml(event.eventType)}"
+      >
+        View
+      </button>
+    `;
+  }
+
+  if (event.snapshot && event.snapshot.error) {
+    return `
+      <span class="badge warning" title="${escapeHtml(event.snapshot.error)}">
+        No Snapshot
+      </span>
+    `;
+  }
+
+  return `<span class="muted">No snapshot</span>`;
+}
+
+function activityMatchesFilter(event) {
+  switch (currentActivityFilter) {
+    case "all":
+      return true;
+    case "ring_notification":
+      return event.source === "ring_notification";
+    case "synthetic_test":
+      return event.source === "synthetic_test";
+    case "has_snapshot":
+      return Boolean(event.snapshotUrl);
+    case "no_snapshot":
+      return !event.snapshotUrl;
+    default:
+      return true;
+  }
+}
+
 function renderActivity(activityResponse) {
   const element = document.getElementById("activity-history");
-  const activity = activityResponse.activity;
+  const activity = activityResponse.activity.filter(activityMatchesFilter);
 
   if (!activity.length) {
-    element.innerHTML = `
-      <p>No activity captured yet. Trigger motion on the camera while this app is running, or click <strong>Add Synthetic Test</strong>.</p>
-    `;
+    element.innerHTML = `<p>No activity matches this filter.</p>`;
     return;
   }
 
   element.innerHTML = `
-    <table>
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Camera</th>
-          <th>Event</th>
-          <th>Source</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${activity
-          .map(
-            (event) => `
-              <tr>
-                <td>${escapeHtml(formatDate(event.receivedAt))}</td>
-                <td>${escapeHtml(event.cameraName)}</td>
-                <td><span class="badge">${escapeHtml(event.eventType)}</span></td>
-                <td>
-                  <span class="badge ${sourceBadgeClass(event.source)}">
-                    ${escapeHtml(sourceLabel(event.source))}
-                  </span>
-                </td>
-              </tr>
-            `
-          )
-          .join("")}
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Camera</th>
+            <th>Event</th>
+            <th>Source</th>
+            <th>Snapshot</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${activity
+            .map(
+              (event) => `
+                <tr>
+                  <td>${escapeHtml(formatDate(event.receivedAt))}</td>
+                  <td>${escapeHtml(event.cameraName)}</td>
+                  <td><span class="badge">${escapeHtml(event.eventType)}</span></td>
+                  <td>
+                    <span class="badge ${sourceBadgeClass(event.source)}">
+                      ${escapeHtml(sourceLabel(event.source))}
+                    </span>
+                  </td>
+                  <td>${renderSnapshotCell(event)}</td>
+                </tr>
+              `
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 }
 
-function showSnapshot(cameraId, cameraName) {
+function renderSnapshotGallery(snapshotResponse) {
+  const element = document.getElementById("snapshot-gallery");
+  const snapshots = snapshotResponse.snapshots || [];
+
+  if (!snapshots.length) {
+    element.innerHTML = `<p>No saved snapshots yet.</p>`;
+    return;
+  }
+
+  element.innerHTML = `
+    <div class="gallery-grid">
+      ${snapshots
+        .map(
+          (snapshot) => `
+            <article class="gallery-item">
+              <img
+                src="${escapeHtml(snapshot.url)}?thumb=${Date.now()}"
+                alt="${escapeHtml(snapshot.filename)}"
+                loading="lazy"
+              />
+              <div class="gallery-meta">
+                <strong>${escapeHtml(snapshot.cameraName || "Unknown camera")}</strong>
+                <span>${escapeHtml(formatDate(snapshot.createdAt))}</span>
+                <span>${escapeHtml(snapshot.eventType || "Snapshot")}</span>
+                <span>${escapeHtml(formatBytes(snapshot.sizeBytes))}</span>
+                <button
+                  class="small-button gallery-snapshot-button"
+                  data-snapshot-url="${escapeHtml(snapshot.url)}"
+                  data-camera-name="${escapeHtml(snapshot.cameraName || "Camera")}"
+                  data-event-type="${escapeHtml(snapshot.eventType || "Snapshot")}"
+                >
+                  Open
+                </button>
+              </div>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function loadSnapshot(title, subtitle, snapshotUrl) {
   const snapshotCard = document.getElementById("snapshot-card");
   const snapshotSubtitle = document.getElementById("snapshot-subtitle");
   const snapshotStatus = document.getElementById("snapshot-status");
   const snapshotImage = document.getElementById("snapshot-image");
 
   snapshotCard.classList.remove("hidden");
-  snapshotSubtitle.textContent = `${cameraName} snapshot`;
+  snapshotSubtitle.textContent = subtitle;
   snapshotStatus.innerHTML = `<span class="badge">Loading snapshot...</span>`;
 
+  snapshotImage.alt = title;
   snapshotImage.removeAttribute("src");
   snapshotImage.classList.add("hidden");
 
-  const snapshotUrl = `/api/cameras/${encodeURIComponent(
-    cameraId
-  )}/snapshot?ts=${Date.now()}`;
+  const urlWithCacheBust = `${snapshotUrl}${snapshotUrl.includes("?") ? "&" : "?"}ts=${Date.now()}`;
 
   snapshotImage.onload = () => {
     snapshotStatus.innerHTML = `<span class="badge good">Snapshot loaded</span>`;
@@ -299,13 +514,31 @@ function showSnapshot(cameraId, cameraName) {
   snapshotImage.onerror = () => {
     snapshotStatus.innerHTML = `
       <span class="badge bad">Snapshot failed</span>
-      <p class="muted">The camera may not have a fresh snapshot available yet.</p>
+      <p class="muted">The snapshot could not be loaded.</p>
     `;
     snapshotImage.classList.add("hidden");
   };
 
-  snapshotImage.src = snapshotUrl;
+  snapshotImage.src = urlWithCacheBust;
   snapshotCard.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function showCameraSnapshot(cameraId, cameraName) {
+  const snapshotUrl = `/api/cameras/${encodeURIComponent(cameraId)}/snapshot`;
+
+  loadSnapshot(
+    `${cameraName} snapshot`,
+    `${cameraName} latest camera snapshot`,
+    snapshotUrl
+  );
+}
+
+function showActivitySnapshot(snapshotUrl, cameraName, eventType) {
+  loadSnapshot(
+    `${cameraName} activity snapshot`,
+    `${cameraName} · ${eventType}`,
+    snapshotUrl
+  );
 }
 
 function hideSnapshot() {
@@ -318,17 +551,43 @@ function hideSnapshot() {
   snapshotCard.classList.add("hidden");
 }
 
+function switchTab(tabName) {
+  document
+    .querySelectorAll(".tab-button")
+    .forEach((button) => button.classList.remove("active"));
+
+  document
+    .querySelectorAll(".tab-panel")
+    .forEach((panel) => panel.classList.remove("active"));
+
+  document
+    .querySelector(`[data-tab="${tabName}"]`)
+    ?.classList.add("active");
+
+  document
+    .getElementById(`tab-${tabName}`)
+    ?.classList.add("active");
+}
+
 async function loadDashboard() {
   try {
-    const [health, status, activity] = await Promise.all([
+    const [health, status, activity, snapshots] = await Promise.all([
       getJson("/api/health"),
       getJson("/api/status"),
       getJson("/api/activity"),
+      getJson("/api/snapshots"),
     ]);
 
-    renderHealth(health);
+    lastDashboardData = { health, status, activity, snapshots };
+
+    renderSummaryCards(health, status, snapshots);
+    renderHealth(health, status, snapshots);
+    renderWarnings(status);
+    renderRecentActivity(activity);
+    renderLatestSnapshot(snapshots);
     renderCameraStatus(status);
     renderActivity(activity);
+    renderSnapshotGallery(snapshots);
   } catch (error) {
     console.error(error);
 
@@ -343,6 +602,7 @@ async function addTestActivity() {
   try {
     await postJson("/api/activity/test");
     await loadDashboard();
+    switchTab("activity");
   } catch (error) {
     console.error(error);
     alert(error.message);
@@ -362,16 +622,63 @@ document
   .addEventListener("click", hideSnapshot);
 
 document.addEventListener("click", (event) => {
-  const button = event.target.closest(".snapshot-button");
+  const tabButton = event.target.closest(".tab-button");
 
-  if (!button) {
+  if (tabButton) {
+    switchTab(tabButton.dataset.tab);
     return;
   }
 
-  const cameraId = button.dataset.cameraId;
-  const cameraName = button.dataset.cameraName || "Camera";
+  const filterButton = event.target.closest(".filter-button");
 
-  showSnapshot(cameraId, cameraName);
+  if (filterButton) {
+    currentActivityFilter = filterButton.dataset.activityFilter || "all";
+
+    document
+      .querySelectorAll(".filter-button")
+      .forEach((button) => button.classList.remove("active"));
+
+    filterButton.classList.add("active");
+
+    if (lastDashboardData.activity) {
+      renderActivity(lastDashboardData.activity);
+    }
+
+    return;
+  }
+
+  const cameraButton = event.target.closest(".snapshot-button");
+
+  if (cameraButton) {
+    const cameraId = cameraButton.dataset.cameraId;
+    const cameraName = cameraButton.dataset.cameraName || "Camera";
+
+    showCameraSnapshot(cameraId, cameraName);
+    return;
+  }
+
+  const activitySnapshotButton = event.target.closest(
+    ".activity-snapshot-button"
+  );
+
+  if (activitySnapshotButton) {
+    const snapshotUrl = activitySnapshotButton.dataset.snapshotUrl;
+    const cameraName = activitySnapshotButton.dataset.cameraName || "Camera";
+    const eventType = activitySnapshotButton.dataset.eventType || "Activity";
+
+    showActivitySnapshot(snapshotUrl, cameraName, eventType);
+    return;
+  }
+
+  const galleryButton = event.target.closest(".gallery-snapshot-button");
+
+  if (galleryButton) {
+    const snapshotUrl = galleryButton.dataset.snapshotUrl;
+    const cameraName = galleryButton.dataset.cameraName || "Camera";
+    const eventType = galleryButton.dataset.eventType || "Snapshot";
+
+    showActivitySnapshot(snapshotUrl, cameraName, eventType);
+  }
 });
 
 loadDashboard();

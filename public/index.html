@@ -10,7 +10,7 @@
       <header>
         <div>
           <h1>Ring Security Dashboard</h1>
-          <p>Local camera status, snapshots, and activity history</p>
+          <p>Local Ring camera dashboard for status, snapshots, and activity</p>
         </div>
 
         <div class="header-actions">
@@ -21,22 +21,57 @@
         </div>
       </header>
 
-      <section class="grid">
-        <article class="card">
-          <h2>System Health</h2>
-          <div id="health">Loading...</div>
-        </article>
+      <nav class="tabs">
+        <button class="tab-button active" data-tab="overview">Overview</button>
+        <button class="tab-button" data-tab="camera">Camera</button>
+        <button class="tab-button" data-tab="activity">Activity</button>
+        <button class="tab-button" data-tab="gallery">Gallery</button>
+      </nav>
 
-        <article class="card">
-          <h2>Camera Status</h2>
+      <section id="tab-overview" class="tab-panel active">
+        <section class="summary-grid" id="summary-cards">Loading...</section>
+
+        <section class="grid">
+          <article class="card">
+            <h2>System Health</h2>
+            <div id="health">Loading...</div>
+          </article>
+
+          <article class="card">
+            <h2>Warnings</h2>
+            <div id="warnings">Loading...</div>
+          </article>
+        </section>
+
+        <section class="grid">
+          <article class="card">
+            <h2>Latest Activity</h2>
+            <div id="recent-activity">Loading...</div>
+          </article>
+
+          <article class="card">
+            <h2>Latest Snapshot</h2>
+            <div id="latest-snapshot">Loading...</div>
+          </article>
+        </section>
+      </section>
+
+      <section id="tab-camera" class="tab-panel">
+        <section class="card">
+          <div class="section-heading">
+            <div>
+              <h2>Camera Status</h2>
+              <p>Detailed Ring camera health and network metrics</p>
+            </div>
+          </div>
           <div id="camera-status">Loading...</div>
-        </article>
+        </section>
       </section>
 
       <section id="snapshot-card" class="card hidden">
         <div class="section-heading">
           <div>
-            <h2>Camera Snapshot</h2>
+            <h2>Snapshot Viewer</h2>
             <p id="snapshot-subtitle">Latest camera image</p>
           </div>
           <button id="close-snapshot-button" class="secondary-button">
@@ -48,9 +83,38 @@
         <img id="snapshot-image" class="snapshot-image" alt="Ring camera snapshot" />
       </section>
 
-      <section class="card">
-        <h2>Activity History</h2>
-        <div id="activity-history">Loading...</div>
+      <section id="tab-activity" class="tab-panel">
+        <section class="card">
+          <div class="section-heading">
+            <div>
+              <h2>Activity History</h2>
+              <p>Filter events by source or snapshot availability</p>
+            </div>
+          </div>
+
+          <div class="filter-row">
+            <button class="filter-button active" data-activity-filter="all">All</button>
+            <button class="filter-button" data-activity-filter="ring_notification">Ring</button>
+            <button class="filter-button" data-activity-filter="synthetic_test">Synthetic</button>
+            <button class="filter-button" data-activity-filter="has_snapshot">Has Snapshot</button>
+            <button class="filter-button" data-activity-filter="no_snapshot">No Snapshot</button>
+          </div>
+
+          <div id="activity-history">Loading...</div>
+        </section>
+      </section>
+
+      <section id="tab-gallery" class="tab-panel">
+        <section class="card">
+          <div class="section-heading">
+            <div>
+              <h2>Snapshot Gallery</h2>
+              <p>Saved snapshots from activity events</p>
+            </div>
+          </div>
+
+          <div id="snapshot-gallery">Loading...</div>
+        </section>
       </section>
     </main>
 

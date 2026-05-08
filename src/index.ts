@@ -9,12 +9,20 @@ const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || ".";
 const TOKEN_FILE = path.join(DATA_DIR, ".ring-refresh-token");
 const ACTIVITY_FILE = path.join(DATA_DIR, ".ring-activity-history.json");
+const SNAPSHOT_DIR = path.join(DATA_DIR, "snapshots");
+
+const MAX_ACTIVITY_EVENTS = 100;
+const SNAPSHOT_TIMEOUT_MS = 15_000;
+const SNAPSHOT_RETENTION_DAYS = Number(process.env.SNAPSHOT_RETENTION_DAYS || 7);
+const MAX_SNAPSHOTS = Number(process.env.MAX_SNAPSHOTS || 250);
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const MAX_ACTIVITY_EVENTS = 100;
+if (!fs.existsSync(SNAPSHOT_DIR)) {
+  fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,6 +34,13 @@ type ActivitySource =
   | "synthetic_test"
   | "legacy_local";
 
+type ActivitySnapshot = {
+  available: boolean;
+  filename?: string;
+  capturedAt?: string;
+  error?: string;
+};
+
 type ActivityEvent = {
   id: string;
   cameraId: number | string;
@@ -33,6 +48,7 @@ type ActivityEvent = {
   eventType: string;
   source: ActivitySource;
   receivedAt: string;
+  snapshot?: ActivitySnapshot;
 };
 
 type BatteryEntry = {
@@ -41,6 +57,25 @@ type BatteryEntry = {
   voltage: number | null;
   present: boolean | null;
   category: string | null;
+};
+
+type DashboardWarning = {
+  severity: "info" | "warning" | "critical";
+  cameraId: number | string;
+  cameraName: string;
+  message: string;
+  metric: string;
+};
+
+type SnapshotGalleryItem = {
+  filename: string;
+  url: string;
+  sizeBytes: number;
+  createdAt: string;
+  relatedActivityId: string | null;
+  cameraName: string | null;
+  eventType: string | null;
+  source: ActivitySource | null;
 };
 
 function getRefreshToken(): string {
@@ -138,6 +173,7 @@ function loadActivityHistory(): ActivityEvent[] {
       eventType: event.eventType ?? "Unknown activity",
       source: event.source ?? "legacy_local",
       receivedAt: event.receivedAt ?? new Date().toISOString(),
+      snapshot: event.snapshot,
     }));
   } catch {
     return [];
@@ -438,6 +474,103 @@ function serializeCamera(camera: any) {
   };
 }
 
+function generateWarnings(serializedCameras: ReturnType<typeof serializeCamera>[]) {
+  const warnings: DashboardWarning[] = [];
+
+  for (const camera of serializedCameras) {
+    const status = camera.status;
+
+    if (status.connectionStatus !== "Online") {
+      warnings.push({
+        severity: "critical",
+        cameraId: camera.id,
+        cameraName: camera.name,
+        metric: "connection",
+        message: `${camera.name} is not reporting online status.`,
+      });
+    }
+
+    for (const battery of status.batteries) {
+      if (battery.percentage !== null && battery.percentage <= 20) {
+        warnings.push({
+          severity: "critical",
+          cameraId: camera.id,
+          cameraName: camera.name,
+          metric: "battery",
+          message: `${camera.name} Battery ${battery.slot} is low at ${battery.percentage}%.`,
+        });
+      } else if (battery.percentage !== null && battery.percentage <= 35) {
+        warnings.push({
+          severity: "warning",
+          cameraId: camera.id,
+          cameraName: camera.name,
+          metric: "battery",
+          message: `${camera.name} Battery ${battery.slot} is getting low at ${battery.percentage}%.`,
+        });
+      }
+    }
+
+    if (
+      status.wifiQuality === "Poor" ||
+      status.wifiQuality === "Very poor" ||
+      status.wifiRiskLevel === "High"
+    ) {
+      warnings.push({
+        severity: "warning",
+        cameraId: camera.id,
+        cameraName: camera.name,
+        metric: "wifi",
+        message: `${camera.name} Wi-Fi signal is ${status.wifiQuality} at ${status.wifiSignal} dBm.`,
+      });
+    }
+
+    if (status.packetLoss !== null && status.packetLoss > 0) {
+      warnings.push({
+        severity: "warning",
+        cameraId: camera.id,
+        cameraName: camera.name,
+        metric: "packet_loss",
+        message: `${camera.name} packet loss is ${status.packetLoss}%.`,
+      });
+    }
+
+    if (status.motionDetection !== "Enabled") {
+      warnings.push({
+        severity: "warning",
+        cameraId: camera.id,
+        cameraName: camera.name,
+        metric: "motion_detection",
+        message: `${camera.name} motion detection is disabled.`,
+      });
+    }
+
+    if (status.motionAlerts !== "Enabled") {
+      warnings.push({
+        severity: "info",
+        cameraId: camera.id,
+        cameraName: camera.name,
+        metric: "motion_alerts",
+        message: `${camera.name} motion alerts are disabled.`,
+      });
+    }
+
+    if (
+      status.firmwareStatus !== "Up to Date" &&
+      status.firmwareStatus !== "Unknown"
+    ) {
+      warnings.push({
+        severity: "info",
+        cameraId: camera.id,
+        cameraName: camera.name,
+        metric: "firmware",
+        message: `${camera.name} firmware status is ${status.firmwareStatus}.`,
+      });
+    }
+  }
+
+  return warnings;
+}
+
 function notificationToActivity(camera: any, notification: any): ActivityEvent {
   const action =
     notification?.android_config?.category ??
@@ -463,8 +596,227 @@ function findCameraById(cameras: any[], cameraId: string) {
   return cameras.find((camera) => String(camera.id) === String(cameraId));
 }
 
+function safeFilename(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function getSnapshotFilePath(filename: string): string {
+  const snapshotPath = path.resolve(SNAPSHOT_DIR, filename);
+  const snapshotRoot = path.resolve(SNAPSHOT_DIR);
+
+  if (!snapshotPath.startsWith(snapshotRoot + path.sep)) {
+    throw new Error("Invalid snapshot filename");
+  }
+
+  return snapshotPath;
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  errorMessage: string
+): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function cleanupSnapshots(activityHistory: ActivityEvent[]) {
+  if (!fs.existsSync(SNAPSHOT_DIR)) {
+    return;
+  }
+
+  const retentionMs = SNAPSHOT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const cutoffTime = Date.now() - retentionMs;
+
+  const files = fs
+    .readdirSync(SNAPSHOT_DIR)
+    .filter((filename) => filename.toLowerCase().endsWith(".jpg"))
+    .map((filename) => {
+      const fullPath = getSnapshotFilePath(filename);
+      const stats = fs.statSync(fullPath);
+
+      return {
+        filename,
+        fullPath,
+        mtimeMs: stats.mtimeMs,
+      };
+    })
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  const filesToDelete = new Set<string>();
+
+  for (const file of files) {
+    if (file.mtimeMs < cutoffTime) {
+      filesToDelete.add(file.fullPath);
+    }
+  }
+
+  for (const file of files.slice(MAX_SNAPSHOTS)) {
+    filesToDelete.add(file.fullPath);
+  }
+
+  for (const filePath of filesToDelete) {
+    try {
+      fs.unlinkSync(filePath);
+    } catch (error) {
+      console.warn("Failed to delete old snapshot:", filePath, error);
+    }
+  }
+
+  const deletedFilenames = new Set(
+    [...filesToDelete].map((filePath) => path.basename(filePath))
+  );
+
+  if (deletedFilenames.size > 0) {
+    const updatedHistory = activityHistory.map((event) => {
+      if (
+        event.snapshot?.filename &&
+        deletedFilenames.has(event.snapshot.filename)
+      ) {
+        return {
+          ...event,
+          snapshot: {
+            available: false,
+            filename: event.snapshot.filename,
+            capturedAt: event.snapshot.capturedAt,
+            error: "Snapshot removed by retention policy",
+          },
+        };
+      }
+
+      return event;
+    });
+
+    saveActivityHistory(updatedHistory);
+  }
+}
+
+async function captureSnapshotForActivity(
+  camera: any,
+  event: ActivityEvent
+): Promise<ActivityEvent> {
+  if (typeof camera.getSnapshot !== "function") {
+    return {
+      ...event,
+      snapshot: {
+        available: false,
+        error: "Camera does not expose getSnapshot()",
+      },
+    };
+  }
+
+  try {
+    const snapshotBuffer = await withTimeout(
+      camera.getSnapshot(),
+      SNAPSHOT_TIMEOUT_MS,
+      "Snapshot capture timed out"
+    );
+
+    if (!Buffer.isBuffer(snapshotBuffer)) {
+      return {
+        ...event,
+        snapshot: {
+          available: false,
+          error: "Camera did not return a snapshot buffer",
+        },
+      };
+    }
+
+    const timestamp = event.receivedAt.replace(/[:.]/g, "-");
+    const cameraName = safeFilename(event.cameraName || "camera");
+    const filename = `${cameraName}-${event.cameraId}-${timestamp}.jpg`;
+    const snapshotPath = getSnapshotFilePath(filename);
+
+    fs.writeFileSync(snapshotPath, snapshotBuffer);
+
+    return {
+      ...event,
+      snapshot: {
+        available: true,
+        filename,
+        capturedAt: new Date().toISOString(),
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+
+    return {
+      ...event,
+      snapshot: {
+        available: false,
+        error: message,
+      },
+    };
+  }
+}
+
+function serializeActivityEvent(event: ActivityEvent) {
+  return {
+    ...event,
+    snapshotUrl:
+      event.snapshot?.available && event.snapshot.filename
+        ? `/api/activity/${encodeURIComponent(event.id)}/snapshot`
+        : null,
+  };
+}
+
+function listSnapshotGallery(activityHistory: ActivityEvent[]): SnapshotGalleryItem[] {
+  if (!fs.existsSync(SNAPSHOT_DIR)) {
+    return [];
+  }
+
+  const activityByFilename = new Map<string, ActivityEvent>();
+
+  for (const event of activityHistory) {
+    if (event.snapshot?.filename) {
+      activityByFilename.set(event.snapshot.filename, event);
+    }
+  }
+
+  return fs
+    .readdirSync(SNAPSHOT_DIR)
+    .filter((filename) => filename.toLowerCase().endsWith(".jpg"))
+    .map((filename) => {
+      const fullPath = getSnapshotFilePath(filename);
+      const stats = fs.statSync(fullPath);
+      const relatedActivity = activityByFilename.get(filename) ?? null;
+
+      return {
+        filename,
+        url: `/api/snapshots/${encodeURIComponent(filename)}`,
+        sizeBytes: stats.size,
+        createdAt: stats.birthtime.toISOString(),
+        relatedActivityId: relatedActivity?.id ?? null,
+        cameraName: relatedActivity?.cameraName ?? null,
+        eventType: relatedActivity?.eventType ?? null,
+        source: relatedActivity?.source ?? null,
+      };
+    })
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+}
+
 async function main() {
   let activityHistory = loadActivityHistory();
+  cleanupSnapshots(activityHistory);
+  activityHistory = loadActivityHistory();
 
   const ringApi = new RingApi({
     refreshToken: getRefreshToken(),
@@ -492,11 +844,15 @@ async function main() {
       isDoorbot: camera.isDoorbot,
     });
 
-    camera.onNewNotification?.subscribe((notification: any) => {
+    camera.onNewNotification?.subscribe(async (notification: any) => {
       const event = notificationToActivity(camera, notification);
-      activityHistory = addActivityEvent(activityHistory, event);
+      const eventWithSnapshot = await captureSnapshotForActivity(camera, event);
 
-      console.log("New Ring activity:", event);
+      activityHistory = addActivityEvent(activityHistory, eventWithSnapshot);
+      cleanupSnapshots(activityHistory);
+      activityHistory = loadActivityHistory();
+
+      console.log("New Ring activity:", eventWithSnapshot);
     });
   }
 
@@ -512,6 +868,8 @@ async function main() {
       timestamp: new Date().toISOString(),
       cameras: cameras.length,
       locations: locations.length,
+      snapshotRetentionDays: SNAPSHOT_RETENTION_DAYS,
+      maxSnapshots: MAX_SNAPSHOTS,
     });
   });
 
@@ -524,12 +882,15 @@ async function main() {
 
   app.get("/api/status", (_req, res) => {
     const serializedCameras = (cameras as any[]).map(serializeCamera);
+    const warnings = generateWarnings(serializedCameras);
 
     res.json({
       ok: true,
       updatedAt: new Date().toISOString(),
       totalCameras: serializedCameras.length,
       totalActivityEvents: activityHistory.length,
+      totalSnapshots: listSnapshotGallery(activityHistory).length,
+      warnings,
       cameras: serializedCameras.map((camera) => ({
         id: camera.id,
         name: camera.name,
@@ -537,6 +898,15 @@ async function main() {
         deviceType: camera.deviceType,
         status: camera.status,
       })),
+    });
+  });
+
+  app.get("/api/warnings", (_req, res) => {
+    const serializedCameras = (cameras as any[]).map(serializeCamera);
+
+    res.json({
+      count: generateWarnings(serializedCameras).length,
+      warnings: generateWarnings(serializedCameras),
     });
   });
 
@@ -560,7 +930,11 @@ async function main() {
     }
 
     try {
-      const snapshotBuffer = await camera.getSnapshot();
+      const snapshotBuffer = await withTimeout(
+        camera.getSnapshot(),
+        SNAPSHOT_TIMEOUT_MS,
+        "Snapshot request timed out"
+      );
 
       res.setHeader("Content-Type", "image/jpeg");
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
@@ -576,14 +950,95 @@ async function main() {
     }
   });
 
-  app.get("/api/activity", (_req, res) => {
+  app.get("/api/snapshots", (_req, res) => {
     res.json({
-      count: activityHistory.length,
-      activity: activityHistory,
+      count: listSnapshotGallery(activityHistory).length,
+      snapshots: listSnapshotGallery(activityHistory),
+      retention: {
+        snapshotRetentionDays: SNAPSHOT_RETENTION_DAYS,
+        maxSnapshots: MAX_SNAPSHOTS,
+      },
     });
   });
 
-  app.post("/api/activity/test", (_req, res) => {
+  app.get("/api/snapshots/:filename", (req, res) => {
+    try {
+      const snapshotPath = getSnapshotFilePath(req.params.filename);
+
+      if (!fs.existsSync(snapshotPath)) {
+        res.status(404).json({
+          ok: false,
+          error: "Snapshot file not found",
+        });
+        return;
+      }
+
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+      res.sendFile(snapshotPath);
+    } catch (error) {
+      console.error("Snapshot gallery request failed:", error);
+
+      res.status(500).json({
+        ok: false,
+        error: "Failed to read snapshot",
+      });
+    }
+  });
+
+  app.get("/api/activity", (_req, res) => {
+    res.json({
+      count: activityHistory.length,
+      activity: activityHistory.map(serializeActivityEvent),
+    });
+  });
+
+  app.get("/api/activity/:activityId/snapshot", (req, res) => {
+    const event = activityHistory.find(
+      (activityEvent) => activityEvent.id === req.params.activityId
+    );
+
+    if (!event) {
+      res.status(404).json({
+        ok: false,
+        error: "Activity event not found",
+      });
+      return;
+    }
+
+    if (!event.snapshot?.available || !event.snapshot.filename) {
+      res.status(404).json({
+        ok: false,
+        error: "No snapshot is attached to this activity event",
+      });
+      return;
+    }
+
+    try {
+      const snapshotPath = getSnapshotFilePath(event.snapshot.filename);
+
+      if (!fs.existsSync(snapshotPath)) {
+        res.status(404).json({
+          ok: false,
+          error: "Snapshot file not found",
+        });
+        return;
+      }
+
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+      res.sendFile(snapshotPath);
+    } catch (error) {
+      console.error("Activity snapshot request failed:", error);
+
+      res.status(500).json({
+        ok: false,
+        error: "Failed to read activity snapshot",
+      });
+    }
+  });
+
+  app.post("/api/activity/test", async (_req, res) => {
     const camera = (cameras as any[])[0];
 
     if (!camera) {
@@ -603,11 +1058,18 @@ async function main() {
       receivedAt: new Date().toISOString(),
     };
 
-    activityHistory = addActivityEvent(activityHistory, testEvent);
+    const testEventWithSnapshot = await captureSnapshotForActivity(
+      camera,
+      testEvent
+    );
+
+    activityHistory = addActivityEvent(activityHistory, testEventWithSnapshot);
+    cleanupSnapshots(activityHistory);
+    activityHistory = loadActivityHistory();
 
     res.json({
       ok: true,
-      event: testEvent,
+      event: serializeActivityEvent(testEventWithSnapshot),
     });
   });
 

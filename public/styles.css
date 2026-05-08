@@ -10,9 +10,9 @@ body {
 }
 
 main {
-  max-width: 1100px;
+  max-width: 1180px;
   margin: 0 auto;
-  padding: 32px;
+  padding: 28px;
 }
 
 header,
@@ -20,7 +20,7 @@ header,
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
 
 h1,
@@ -31,9 +31,10 @@ p {
 }
 
 header p,
-.camera p,
+.camera-card p,
 .muted,
-.section-heading p {
+.section-heading p,
+small {
   color: #94a3b8;
 }
 
@@ -41,10 +42,6 @@ header p,
 .camera-actions {
   display: flex;
   gap: 10px;
-}
-
-.camera-actions {
-  margin: 12px 0 16px;
 }
 
 button {
@@ -73,11 +70,68 @@ button:hover {
   color: #e5e7eb;
 }
 
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #0f172a;
+  padding: 8px 0;
+}
+
+.tab-button {
+  background: #111827;
+  color: #e5e7eb;
+  border: 1px solid #1f2937;
+}
+
+.tab-button.active {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.summary-card {
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+
+.summary-card strong {
+  display: block;
+  font-size: 28px;
+  margin: 8px 0;
+}
+
+.summary-label {
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .grid {
   display: grid;
-  grid-template-columns: 1fr 2fr;
+  grid-template-columns: 1fr 1fr;
   gap: 16px;
-  margin-bottom: 16px;
 }
 
 .card {
@@ -118,16 +172,33 @@ button:hover {
   background: #854d0e;
 }
 
-.camera {
-  border-top: 1px solid #1f2937;
-  padding-top: 16px;
-  margin-top: 16px;
+.warning-list,
+.compact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.camera:first-child {
-  border-top: 0;
-  padding-top: 0;
-  margin-top: 0;
+.warning-item,
+.compact-item {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-bottom: 1px solid #1f2937;
+  padding-bottom: 10px;
+}
+
+.compact-item small {
+  display: block;
+  margin-top: 4px;
+}
+
+.camera-card {
+  border: 1px solid #1f2937;
+  border-radius: 16px;
+  padding: 18px;
+  background: #020617;
 }
 
 .camera-heading {
@@ -135,6 +206,16 @@ button:hover {
   justify-content: space-between;
   gap: 12px;
   align-items: flex-start;
+}
+
+.camera-actions {
+  margin: 12px 0 16px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 20px;
 }
 
 .metric-row {
@@ -186,6 +267,28 @@ button:hover {
   display: none;
 }
 
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.filter-button {
+  background: #334155;
+  color: #e5e7eb;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.filter-button.active {
+  background: #1d4ed8;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -202,8 +305,65 @@ th {
   color: #94a3b8;
 }
 
-@media (max-width: 800px) {
-  .grid {
+.latest-snapshot-preview {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 14px;
+  align-items: center;
+}
+
+.latest-snapshot-preview img {
+  width: 150px;
+  height: 90px;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid #1f2937;
+  background: #020617;
+}
+
+.latest-snapshot-preview small {
+  display: block;
+  margin: 6px 0 10px;
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.gallery-item {
+  background: #020617;
+  border: 1px solid #1f2937;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.gallery-item img {
+  display: block;
+  width: 100%;
+  height: 140px;
+  object-fit: cover;
+  background: #0f172a;
+}
+
+.gallery-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.gallery-meta strong {
+  color: #e5e7eb;
+}
+
+@media (max-width: 900px) {
+  .summary-grid,
+  .grid,
+  .metric-grid {
     grid-template-columns: 1fr;
   }
 
@@ -220,5 +380,14 @@ th {
 
   button {
     flex: 1;
+  }
+
+  .latest-snapshot-preview {
+    grid-template-columns: 1fr;
+  }
+
+  .latest-snapshot-preview img {
+    width: 100%;
+    height: 180px;
   }
 }
