@@ -10,7 +10,7 @@
       <header>
         <div>
           <h1>Ring Security Dashboard</h1>
-          <p>Local Ring camera dashboard for status, snapshots, and activity</p>
+          <p>Local Ring device dashboard for cameras, chimes, snapshots, and activity</p>
         </div>
 
         <div class="header-actions">
@@ -24,6 +24,7 @@
       <nav class="tabs">
         <button class="tab-button active" data-tab="overview">Overview</button>
         <button class="tab-button" data-tab="camera">Camera</button>
+        <button class="tab-button" data-tab="chime">Chime</button>
         <button class="tab-button" data-tab="activity">Activity</button>
         <button class="tab-button" data-tab="gallery">Gallery</button>
       </nav>
@@ -65,6 +66,18 @@
             </div>
           </div>
           <div id="camera-status">Loading...</div>
+        </section>
+      </section>
+
+      <section id="tab-chime" class="tab-panel">
+        <section class="card">
+          <div class="section-heading">
+            <div>
+              <h2>Chime Status</h2>
+              <p>Ring Chime health, Wi-Fi, volume, and firmware details</p>
+            </div>
+          </div>
+          <div id="chime-status">Loading...</div>
         </section>
       </section>
 

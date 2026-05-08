@@ -125,6 +125,12 @@ function renderSummaryCards(health, status, snapshots) {
     </article>
 
     <article class="summary-card">
+      <span class="summary-label">Chimes</span>
+      <strong>${escapeHtml(health.chimes ?? status.totalChimes ?? 0)}</strong>
+      <small>Ring chime devices</small>
+    </article>
+
+    <article class="summary-card">
       <span class="summary-label">Connection</span>
       <strong>${escapeHtml(latestStatus?.connectionStatus || "Unknown")}</strong>
       <small>${escapeHtml(latestCamera?.name || "No camera")}</small>
@@ -154,6 +160,7 @@ function renderHealth(health, status, snapshots) {
     </div>
 
     <p><strong>Cameras:</strong> ${escapeHtml(health.cameras)}</p>
+    <p><strong>Chimes:</strong> ${escapeHtml(health.chimes ?? status.totalChimes ?? 0)}</p>
     <p><strong>Locations:</strong> ${escapeHtml(health.locations)}</p>
     <p><strong>Activity Events:</strong> ${escapeHtml(status.totalActivityEvents)}</p>
     <p><strong>Snapshots:</strong> ${escapeHtml(snapshots.count)}</p>
@@ -354,6 +361,69 @@ function renderCameraStatus(status) {
             ${renderMetricRow("Motion Detection", escapeHtml(cameraStatus.motionDetection))}
             ${renderMetricRow("Recording", escapeHtml(cameraStatus.recordingStatus))}
             ${renderMetricRow("Last Health Update", escapeHtml(formatDate(cameraStatus.lastHealthUpdate)))}
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderChimeStatus(status) {
+  const element = document.getElementById("chime-status");
+  const chimes = status.chimes || [];
+
+  if (!chimes.length) {
+    element.innerHTML = `<p>No Ring chimes found.</p>`;
+    return;
+  }
+
+  element.innerHTML = chimes
+    .map((chime) => {
+      const chimeStatus = chime.status;
+
+      const connectionBadge =
+        chimeStatus.connectionStatus === "Online"
+          ? `<span class="badge good">Online</span>`
+          : chimeStatus.connectionStatus === "Offline"
+            ? `<span class="badge bad">Offline</span>`
+            : `<span class="badge">${escapeHtml(chimeStatus.connectionStatus)}</span>`;
+
+      const wifi =
+        chimeStatus.wifiSignal !== null
+          ? `${escapeHtml(chimeStatus.wifiSignal)} dBm (${escapeHtml(chimeStatus.wifiQuality)})`
+          : "Unknown";
+
+      const bandwidth =
+        chimeStatus.currentBandwidthMbps !== null
+          ? `${escapeHtml(chimeStatus.currentBandwidthMbps)} Mbps`
+          : "Unknown";
+
+      const firmware = `${escapeHtml(chimeStatus.firmwareVersion)} <span class="muted">(${escapeHtml(chimeStatus.firmwareStatus)})</span>`;
+
+      return `
+        <div class="camera-card">
+          <div class="camera-heading">
+            <div>
+              <h3>${escapeHtml(chime.name)}</h3>
+              <p>${escapeHtml(chime.model || "Unknown model")}</p>
+            </div>
+            <span class="badge">${escapeHtml(chime.deviceType || "Unknown type")}</span>
+          </div>
+
+          <div class="metric-grid">
+            ${renderMetricRow("Connection", connectionBadge)}
+            ${renderMetricRow("Volume", escapeHtml(chimeStatus.volume ?? "Unknown"))}
+            ${renderMetricRow("Do Not Disturb", escapeHtml(chimeStatus.doNotDisturb))}
+            ${renderMetricRow("Night Light", escapeHtml(chimeStatus.nightLight))}
+            ${renderMetricRow("Status LED", escapeHtml(chimeStatus.statusLed))}
+            ${renderMetricRow("Wi-Fi Signal", wifi)}
+            ${renderMetricRow("Network", escapeHtml(chimeStatus.networkName))}
+            ${renderMetricRow("Network Type", escapeHtml(chimeStatus.networkConnection))}
+            ${renderMetricRow("Bandwidth", bandwidth)}
+            ${renderMetricRow("Packet Loss", escapeHtml(chimeStatus.packetLossQuality))}
+            ${renderMetricRow("Firmware", firmware)}
+            ${renderMetricRow("Uptime", escapeHtml(chimeStatus.uptime))}
+            ${renderMetricRow("Last Health Update", escapeHtml(formatDate(chimeStatus.lastHealthUpdate)))}
           </div>
         </div>
       `;
@@ -586,6 +656,7 @@ async function loadDashboard() {
     renderRecentActivity(activity);
     renderLatestSnapshot(snapshots);
     renderCameraStatus(status);
+    renderChimeStatus(status);
     renderActivity(activity);
     renderSnapshotGallery(snapshots);
   } catch (error) {

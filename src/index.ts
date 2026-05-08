@@ -474,6 +474,89 @@ function serializeCamera(camera: any) {
   };
 }
 
+function serializeChime(chime: any) {
+  const data = asRecord(chime.data) ?? {};
+  const health = asRecord(data.health) ?? {};
+  const settings = asRecord(data.settings) ?? {};
+  const alerts = asRecord(data.alerts) ?? {};
+  const doNotDisturb = asRecord(data.do_not_disturb) ?? {};
+
+  const rssi = toNumber(health.rssi);
+  const dndSecondsLeft = toNumber(doNotDisturb.seconds_left);
+  const nightLightState = data.night_light_state ?? health.night_light_state;
+  const statusLedEnabled = toBoolean(settings.status_led_enable);
+
+  return {
+    id: chime.id ?? data.id,
+    name: chime.name ?? data.description ?? "Unknown chime",
+    model: chime.model ?? data.kind ?? "Unknown model",
+    deviceType: chime.deviceType ?? data.kind ?? "Unknown type",
+
+    status: {
+      connectionStatus: getConnectionStatus(health, alerts),
+
+      firmwareVersion:
+        typeof health.firmware_version === "string"
+          ? health.firmware_version
+          : "Unknown",
+
+      firmwareStatus:
+        typeof health.firmware_version_status === "string"
+          ? health.firmware_version_status
+          : typeof data.firmware_version === "string"
+            ? data.firmware_version
+            : "Unknown",
+
+      wifiSignal: rssi,
+      wifiQuality:
+        humanizeCategory(health.rssi_category) ?? classifyRssi(rssi),
+
+      networkName:
+        typeof health.wifi_name === "string" ? health.wifi_name : "Unknown",
+
+      networkConnection:
+        typeof health.network_connection_value === "string"
+          ? health.network_connection_value
+          : "Unknown",
+
+      packetLossQuality:
+        humanizeCategory(health.packet_loss_category) ?? "Unknown",
+
+      currentBandwidthMbps: toNumber(health.current_bandwidth_mb),
+
+      volume: toNumber(settings.volume),
+
+      doNotDisturb:
+        dndSecondsLeft !== null && dndSecondsLeft > 0
+          ? `On, ${dndSecondsLeft}s remaining`
+          : "Off",
+
+      nightLight:
+        typeof nightLightState === "string"
+          ? humanizeCategory(nightLightState) ?? nightLightState
+          : toBoolean(nightLightState) === true
+            ? "On"
+            : "Off",
+
+      statusLed:
+        statusLedEnabled === true
+          ? "Enabled"
+          : statusLedEnabled === false
+            ? "Disabled"
+            : "Unknown",
+
+      uptime: formatUptime(health.uptime_sec),
+      lastHealthUpdate: fromUnixSeconds(health.last_update_time),
+    },
+
+    debug: {
+      rawDataKeys: Object.keys(data).sort(),
+      healthKeys: Object.keys(health).sort(),
+      settingsKeys: Object.keys(settings).sort(),
+    },
+  };
+}
+
 function generateWarnings(serializedCameras: ReturnType<typeof serializeCamera>[]) {
   const warnings: DashboardWarning[] = [];
 
@@ -571,6 +654,64 @@ function generateWarnings(serializedCameras: ReturnType<typeof serializeCamera>[
   return warnings;
 }
 
+function generateChimeWarnings(
+  serializedChimes: ReturnType<typeof serializeChime>[]
+): DashboardWarning[] {
+  const warnings: DashboardWarning[] = [];
+
+  for (const chime of serializedChimes) {
+    const status = chime.status;
+
+    if (status.connectionStatus !== "Online") {
+      warnings.push({
+        severity: "critical",
+        cameraId: chime.id,
+        cameraName: chime.name,
+        metric: "chime_connection",
+        message: `${chime.name} chime is not reporting online status.`,
+      });
+    }
+
+    if (
+      status.wifiQuality === "Poor" ||
+      status.wifiQuality === "Very poor"
+    ) {
+      warnings.push({
+        severity: "warning",
+        cameraId: chime.id,
+        cameraName: chime.name,
+        metric: "chime_wifi",
+        message: `${chime.name} chime Wi-Fi signal is ${status.wifiQuality} at ${status.wifiSignal} dBm.`,
+      });
+    }
+
+    if (status.doNotDisturb !== "Off") {
+      warnings.push({
+        severity: "info",
+        cameraId: chime.id,
+        cameraName: chime.name,
+        metric: "chime_dnd",
+        message: `${chime.name} chime has Do Not Disturb enabled.`,
+      });
+    }
+
+    if (
+      status.firmwareStatus !== "Up to Date" &&
+      status.firmwareStatus !== "Unknown"
+    ) {
+      warnings.push({
+        severity: "info",
+        cameraId: chime.id,
+        cameraName: chime.name,
+        metric: "chime_firmware",
+        message: `${chime.name} chime firmware status is ${status.firmwareStatus}.`,
+      });
+    }
+  }
+
+  return warnings;
+}
+
 function notificationToActivity(camera: any, notification: any): ActivityEvent {
   const action =
     notification?.android_config?.category ??
@@ -594,6 +735,34 @@ function notificationToActivity(camera: any, notification: any): ActivityEvent {
 
 function findCameraById(cameras: any[], cameraId: string) {
   return cameras.find((camera) => String(camera.id) === String(cameraId));
+}
+
+function getChimesFromLocations(locations: any[]): any[] {
+  return locations.flatMap((location) =>
+    Array.isArray(location.chimes) ? location.chimes : []
+  );
+}
+
+function formatUptime(secondsValue: unknown): string {
+  const seconds = toNumber(secondsValue);
+
+  if (seconds === null) {
+    return "Unknown";
+  }
+
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  if (days > 0) {
+    return `${days}d ${hours}h ${minutes}m`;
+  }
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  return `${minutes}m`;
 }
 
 function safeFilename(value: string): string {
@@ -831,9 +1000,41 @@ async function main() {
 
   const locations = await ringApi.getLocations();
   const cameras = await ringApi.getCameras();
+  const chimes = getChimesFromLocations(locations as any[]);
+
+  for (const location of locations as any[]) {
+  console.log("Location:", location.name);
+
+  if (location.chimes) {
+    console.log(`Found ${location.chimes.length} chime(s)`);
+
+    for (const chime of location.chimes) {
+      console.log({
+        id: chime.id,
+        name: chime.name,
+        model: chime.model,
+        deviceType: chime.deviceType,
+        dataKeys: Object.keys(chime.data ?? {}).sort(),
+        data: chime.data,
+      });
+    }
+  } else {
+    console.log("No chimes property found on location");
+  }
+}
 
   console.log(`Found ${locations.length} Ring location(s)`);
   console.log(`Found ${cameras.length} Ring camera(s)`);
+  console.log(`Found ${chimes.length} Ring chime(s)`);
+
+  for (const chime of chimes as any[]) {
+  console.log({
+    id: chime.id,
+    name: chime.name,
+    model: chime.model,
+    deviceType: chime.deviceType,
+  });
+  }
 
   for (const camera of cameras as any[]) {
     console.log({
@@ -862,15 +1063,16 @@ async function main() {
   app.use(express.static(publicDir));
 
   app.get("/api/health", (_req, res) => {
-    res.json({
-      ok: true,
-      app: "ring-dashboard",
-      timestamp: new Date().toISOString(),
-      cameras: cameras.length,
-      locations: locations.length,
-      snapshotRetentionDays: SNAPSHOT_RETENTION_DAYS,
-      maxSnapshots: MAX_SNAPSHOTS,
-    });
+  res.json({
+    ok: true,
+    app: "ring-dashboard",
+    timestamp: new Date().toISOString(),
+    cameras: cameras.length,
+    chimes: chimes.length,
+    locations: locations.length,
+    snapshotRetentionDays: SNAPSHOT_RETENTION_DAYS,
+    maxSnapshots: MAX_SNAPSHOTS,
+    }); 
   });
 
   app.get("/api/cameras", (_req, res) => {
@@ -880,14 +1082,40 @@ async function main() {
     });
   });
 
+  app.get("/api/chimes", (_req, res) => {
+    const serializedChimes = (chimes as any[]).map(serializeChime);
+
+    res.json({
+      count: serializedChimes.length,
+      chimes: serializedChimes,
+    });
+  });
+
+  app.get("/api/devices", (_req, res) => {
+    const serializedCameras = (cameras as any[]).map(serializeCamera);
+    const serializedChimes = (chimes as any[]).map(serializeChime);
+
+    res.json({
+      count: serializedCameras.length + serializedChimes.length,
+      cameras: serializedCameras,
+      chimes: serializedChimes,
+    });
+  });
+
   app.get("/api/status", (_req, res) => {
     const serializedCameras = (cameras as any[]).map(serializeCamera);
-    const warnings = generateWarnings(serializedCameras);
+    const serializedChimes = (chimes as any[]).map(serializeChime);
+
+    const warnings = [
+      ...generateWarnings(serializedCameras),
+      ...generateChimeWarnings(serializedChimes),
+    ];
 
     res.json({
       ok: true,
       updatedAt: new Date().toISOString(),
       totalCameras: serializedCameras.length,
+      totalChimes: serializedChimes.length,
       totalActivityEvents: activityHistory.length,
       totalSnapshots: listSnapshotGallery(activityHistory).length,
       warnings,
@@ -897,6 +1125,13 @@ async function main() {
         model: camera.model,
         deviceType: camera.deviceType,
         status: camera.status,
+      })),
+      chimes: serializedChimes.map((chime) => ({
+        id: chime.id,
+        name: chime.name,
+        model: chime.model,
+        deviceType: chime.deviceType,
+        status: chime.status,
       })),
     });
   });
@@ -1103,6 +1338,43 @@ async function main() {
             alerts: data.alerts ?? null,
             settings: data.settings ?? null,
             features: data.features ?? null,
+          },
+        };
+      }),
+    });
+  });
+
+  app.get("/api/debug/chimes", (_req, res) => {
+    res.json({
+      warning:
+        "Debug view only. Do not expose this dashboard publicly without auth.",
+      chimes: (chimes as any[]).map((chime) => {
+        const data = asRecord(chime.data) ?? {};
+        const health = asRecord(data.health) ?? {};
+        const settings = asRecord(data.settings) ?? {};
+
+        return {
+          id: chime.id,
+          name: chime.name,
+          model: chime.model,
+          deviceType: chime.deviceType,
+          topLevelDataKeys: Object.keys(data).sort(),
+          healthKeys: Object.keys(health).sort(),
+          settingsKeys: Object.keys(settings).sort(),
+          selectedValues: {
+            connected: health.connected ?? null,
+            firmware_version: health.firmware_version ?? null,
+            firmware_version_status: health.firmware_version_status ?? null,
+            rssi: health.rssi ?? null,
+            rssi_category: health.rssi_category ?? null,
+            wifi_name: health.wifi_name ?? null,
+            network_connection_value: health.network_connection_value ?? null,
+            current_bandwidth_mb: health.current_bandwidth_mb ?? null,
+            volume: settings.volume ?? null,
+            do_not_disturb: data.do_not_disturb ?? null,
+            night_light_state: data.night_light_state ?? null,
+            status_led_enable: settings.status_led_enable ?? null,
+            uptime_sec: health.uptime_sec ?? null,
           },
         };
       }),
