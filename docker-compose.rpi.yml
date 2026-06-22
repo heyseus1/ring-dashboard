@@ -1,0 +1,15 @@
+services:
+  ring-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ring-dashboard
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      PORT: 3000
+      DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
