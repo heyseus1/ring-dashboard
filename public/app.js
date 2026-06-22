@@ -6,8 +6,17 @@ let lastDashboardData = {
   snapshots: null,
 };
 
+function redirectToLogin() {
+  window.location.replace("/login");
+}
+
 async function getJson(url) {
   const response = await fetch(url);
+
+  if (response.status === 401) {
+    redirectToLogin();
+    throw new Error("Session expired");
+  }
 
   if (!response.ok) {
     throw new Error(`Request failed: ${url}`);
@@ -24,6 +33,11 @@ async function postJson(url, body = {}) {
     },
     body: JSON.stringify(body),
   });
+
+  if (response.status === 401) {
+    redirectToLogin();
+    throw new Error("Session expired");
+  }
 
   if (!response.ok) {
     throw new Error(`Request failed: ${url}`);
@@ -752,5 +766,42 @@ document.addEventListener("click", (event) => {
   }
 });
 
+async function initAuthControls() {
+  const userEl = document.getElementById("auth-user");
+  const logoutButton = document.getElementById("logout-button");
+
+  try {
+    const status = await getJson("/api/auth/status");
+
+    if (!status.enabled) {
+      return;
+    }
+
+    if (!status.authenticated) {
+      redirectToLogin();
+      return;
+    }
+
+    if (status.username) {
+      userEl.textContent = `Signed in as ${status.username}`;
+      userEl.classList.remove("hidden");
+    }
+
+    logoutButton.classList.remove("hidden");
+    logoutButton.addEventListener("click", async () => {
+      try {
+        await postJson("/api/logout");
+      } catch (error) {
+        console.error(error);
+      } finally {
+        redirectToLogin();
+      }
+    });
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+initAuthControls();
 loadDashboard();
 setInterval(loadDashboard, 5000);

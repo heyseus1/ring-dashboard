@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "clean": "rm -rf dist",
+    "auth:hash": "node scripts/hash-password.mjs",
     "docker:build": "docker build -t ring-dashboard:local .",
     "docker:run": "docker run --rm -p 3000:3000 --env-file .env -v $(pwd)/data:/app/data ring-dashboard:local"
   },

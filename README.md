@@ -97,6 +97,51 @@ data/.ring-refresh-token
 
 Do not commit this file.
 
+## Dashboard Login
+
+The dashboard can require a username and password before showing any Ring data.
+This is separate from the Ring refresh token above and is meant purely to keep
+the local web UI private on your network.
+
+This login is **local-only**. It does not contact any external identity
+provider, makes no network calls, and stores nothing in the cloud. Passwords are
+hashed with scrypt (via Node's built-in `crypto`), and sessions are random
+tokens held in memory and referenced by an `HttpOnly; SameSite=Strict` cookie.
+
+### Enabling login
+
+Generate a password hash:
+
+```bash
+npm run auth:hash
+```
+
+Copy the printed line into your `.env`, and set a username:
+
+```env
+AUTH_USERNAME=admin
+AUTH_PASSWORD_HASH=scrypt$....$....
+```
+
+Restart the dashboard. Login turns on automatically once a username and password
+hash (or `AUTH_PASSWORD`) are present. On startup the logs will confirm:
+
+```text
+[auth] Authentication enabled for user "admin".
+```
+
+### Notes
+
+- If no credentials are set, the dashboard runs **without** a login and prints a
+  warning on startup. Do not expose it to your network in that state.
+- `GET /api/health` stays open without login so the Docker healthcheck works. It
+  only returns device counts, not Ring data.
+- Sessions are kept in memory, so restarting the container requires logging in
+  again. Session length defaults to 12 hours (`AUTH_SESSION_TTL_HOURS`).
+- Set `AUTH_COOKIE_SECURE=true` only if you put the dashboard behind HTTPS.
+- The cookie uses `SameSite=Strict`, and the login IP is taken from the socket
+  (not `X-Forwarded-For`), since this is intended for direct local access.
+
 ## Docker Files
 
 The app runs through Docker Compose.
@@ -159,6 +204,7 @@ The dashboard includes:
 - Snapshot viewer
 - Local activity history
 - Synthetic test event button
+- Optional username/password login
 
 Synthetic test events are fake local events used to test the dashboard UI. They are not Ring source-of-truth data.
 
@@ -292,9 +338,6 @@ Do not expose it directly to the public internet without adding authentication, 
 Possible future features:
 
 - Live feed button
-- Saved snapshot history
 - Real Ring event history backfill
 - SQLite or Postgres storage
-- Dashboard authentication
-- GitHub Actions CI
 - Kubernetes deployment

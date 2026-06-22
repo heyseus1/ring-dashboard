@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { RingApi } from "ring-client-api";
+import { installAuth, loadAuthConfig } from "./auth.js";
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || ".";
@@ -1060,8 +1061,18 @@ async function main() {
   const app = express();
 
   app.use(express.json());
-  app.use(express.static(publicDir));
 
+  // Local-only authentication. Registers the public login/logout/status
+  // routes and the login page, then returns the gate middleware.
+  const authConfig = await loadAuthConfig();
+  const { requireAuth } = installAuth(app, authConfig, publicDir);
+
+  if (authConfig.enabled) {
+    console.log(`[auth] Authentication enabled for user "${authConfig.username}".`);
+  }
+
+  // Health check stays public so the Docker HEALTHCHECK can reach it without
+  // a session. It only exposes device counts, not Ring data.
   app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
@@ -1074,6 +1085,11 @@ async function main() {
     maxSnapshots: MAX_SNAPSHOTS,
     }); 
   });
+
+  // Everything below this line requires a valid session (when auth is enabled).
+  app.use(requireAuth);
+
+  app.use(express.static(publicDir));
 
   app.get("/api/cameras", (_req, res) => {
     res.json({
