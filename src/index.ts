@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { RingApi } from "ring-client-api";
 import { installAuth, loadAuthConfig } from "./auth.js";
+import { createLiveUpdates } from "./sse.js";
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || ".";
@@ -16,6 +17,11 @@ const MAX_ACTIVITY_EVENTS = 100;
 const SNAPSHOT_TIMEOUT_MS = 15_000;
 const SNAPSHOT_RETENTION_DAYS = Number(process.env.SNAPSHOT_RETENTION_DAYS || 7);
 const MAX_SNAPSHOTS = Number(process.env.MAX_SNAPSHOTS || 250);
+
+// Live-update (SSE) cadence. The status tick covers Ring health data that
+// arrives via background polling; the heartbeat keeps the connection open.
+const SSE_TICK_MS = Number(process.env.SSE_TICK_SECONDS || 15) * 1000;
+const SSE_HEARTBEAT_MS = 25_000;
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1028,6 +1034,114 @@ async function main() {
   console.log(`Found ${cameras.length} Ring camera(s)`);
   console.log(`Found ${chimes.length} Ring chime(s)`);
 
+  // ---- Shared payload builders ----
+  // Used by both the REST endpoints and the live (SSE) stream so the two can
+  // never drift out of sync.
+
+  function buildHealthPayload() {
+    return {
+      ok: true,
+      app: "ring-dashboard",
+      timestamp: new Date().toISOString(),
+      cameras: cameras.length,
+      chimes: chimes.length,
+      locations: locations.length,
+      snapshotRetentionDays: SNAPSHOT_RETENTION_DAYS,
+      maxSnapshots: MAX_SNAPSHOTS,
+    };
+  }
+
+  function buildStatusPayload() {
+    const serializedCameras = (cameras as any[]).map(serializeCamera);
+    const serializedChimes = (chimes as any[]).map(serializeChime);
+
+    const warnings = [
+      ...generateWarnings(serializedCameras),
+      ...generateChimeWarnings(serializedChimes),
+    ];
+
+    return {
+      ok: true,
+      updatedAt: new Date().toISOString(),
+      totalCameras: serializedCameras.length,
+      totalChimes: serializedChimes.length,
+      totalActivityEvents: activityHistory.length,
+      totalSnapshots: listSnapshotGallery(activityHistory).length,
+      warnings,
+      cameras: serializedCameras.map((camera) => ({
+        id: camera.id,
+        name: camera.name,
+        model: camera.model,
+        deviceType: camera.deviceType,
+        status: camera.status,
+      })),
+      chimes: serializedChimes.map((chime) => ({
+        id: chime.id,
+        name: chime.name,
+        model: chime.model,
+        deviceType: chime.deviceType,
+        status: chime.status,
+      })),
+    };
+  }
+
+  function buildActivityPayload() {
+    return {
+      count: activityHistory.length,
+      activity: activityHistory.map(serializeActivityEvent),
+    };
+  }
+
+  function buildSnapshotsPayload() {
+    const snapshots = listSnapshotGallery(activityHistory);
+    return {
+      count: snapshots.length,
+      snapshots,
+      retention: {
+        snapshotRetentionDays: SNAPSHOT_RETENTION_DAYS,
+        maxSnapshots: MAX_SNAPSHOTS,
+      },
+    };
+  }
+
+  function buildDashboardPayload() {
+    return {
+      health: buildHealthPayload(),
+      status: buildStatusPayload(),
+      activity: buildActivityPayload(),
+      snapshots: buildSnapshotsPayload(),
+    };
+  }
+
+  // ---- Live updates (Server-Sent Events) ----
+  // One open connection per browser instead of every browser polling four
+  // endpoints on a timer. The server pushes a fresh payload only when the
+  // meaningful state changes (or immediately when new activity arrives).
+
+  // A fingerprint of the parts that matter, excluding volatile timestamps, so
+  // the periodic tick does not re-send identical state.
+  function dashboardSignature(
+    payload: ReturnType<typeof buildDashboardPayload>
+  ): string {
+    return JSON.stringify({
+      warnings: payload.status.warnings,
+      cameras: payload.status.cameras,
+      chimes: payload.status.chimes,
+      activity: payload.activity.activity.map((event) => event.id),
+      snapshots: payload.snapshots.snapshots.map(
+        (snapshot) => snapshot.filename
+      ),
+    });
+  }
+
+  const liveUpdates = createLiveUpdates({
+    buildPayload: buildDashboardPayload,
+    signature: dashboardSignature,
+    eventName: "dashboard",
+    tickMs: SSE_TICK_MS,
+    heartbeatMs: SSE_HEARTBEAT_MS,
+  });
+
   for (const chime of chimes as any[]) {
   console.log({
     id: chime.id,
@@ -1054,6 +1168,7 @@ async function main() {
       cleanupSnapshots(activityHistory);
       activityHistory = loadActivityHistory();
 
+      liveUpdates.broadcast(true);
       console.log("New Ring activity:", eventWithSnapshot);
     });
   }
@@ -1074,22 +1189,17 @@ async function main() {
   // Health check stays public so the Docker HEALTHCHECK can reach it without
   // a session. It only exposes device counts, not Ring data.
   app.get("/api/health", (_req, res) => {
-  res.json({
-    ok: true,
-    app: "ring-dashboard",
-    timestamp: new Date().toISOString(),
-    cameras: cameras.length,
-    chimes: chimes.length,
-    locations: locations.length,
-    snapshotRetentionDays: SNAPSHOT_RETENTION_DAYS,
-    maxSnapshots: MAX_SNAPSHOTS,
-    }); 
+    res.json(buildHealthPayload());
   });
 
   // Everything below this line requires a valid session (when auth is enabled).
   app.use(requireAuth);
 
   app.use(express.static(publicDir));
+
+  // Live update stream. EventSource sends the session cookie automatically, so
+  // this sits behind the same auth gate as the rest of the API.
+  app.get("/api/events", liveUpdates.handler);
 
   app.get("/api/cameras", (_req, res) => {
     res.json({
@@ -1119,37 +1229,7 @@ async function main() {
   });
 
   app.get("/api/status", (_req, res) => {
-    const serializedCameras = (cameras as any[]).map(serializeCamera);
-    const serializedChimes = (chimes as any[]).map(serializeChime);
-
-    const warnings = [
-      ...generateWarnings(serializedCameras),
-      ...generateChimeWarnings(serializedChimes),
-    ];
-
-    res.json({
-      ok: true,
-      updatedAt: new Date().toISOString(),
-      totalCameras: serializedCameras.length,
-      totalChimes: serializedChimes.length,
-      totalActivityEvents: activityHistory.length,
-      totalSnapshots: listSnapshotGallery(activityHistory).length,
-      warnings,
-      cameras: serializedCameras.map((camera) => ({
-        id: camera.id,
-        name: camera.name,
-        model: camera.model,
-        deviceType: camera.deviceType,
-        status: camera.status,
-      })),
-      chimes: serializedChimes.map((chime) => ({
-        id: chime.id,
-        name: chime.name,
-        model: chime.model,
-        deviceType: chime.deviceType,
-        status: chime.status,
-      })),
-    });
+    res.json(buildStatusPayload());
   });
 
   app.get("/api/warnings", (_req, res) => {
@@ -1202,14 +1282,7 @@ async function main() {
   });
 
   app.get("/api/snapshots", (_req, res) => {
-    res.json({
-      count: listSnapshotGallery(activityHistory).length,
-      snapshots: listSnapshotGallery(activityHistory),
-      retention: {
-        snapshotRetentionDays: SNAPSHOT_RETENTION_DAYS,
-        maxSnapshots: MAX_SNAPSHOTS,
-      },
-    });
+    res.json(buildSnapshotsPayload());
   });
 
   app.get("/api/snapshots/:filename", (req, res) => {
@@ -1238,10 +1311,7 @@ async function main() {
   });
 
   app.get("/api/activity", (_req, res) => {
-    res.json({
-      count: activityHistory.length,
-      activity: activityHistory.map(serializeActivityEvent),
-    });
+    res.json(buildActivityPayload());
   });
 
   app.get("/api/activity/:activityId/snapshot", (req, res) => {
@@ -1317,6 +1387,8 @@ async function main() {
     activityHistory = addActivityEvent(activityHistory, testEventWithSnapshot);
     cleanupSnapshots(activityHistory);
     activityHistory = loadActivityHistory();
+
+    liveUpdates.broadcast(true);
 
     res.json({
       ok: true,
@@ -1400,6 +1472,10 @@ async function main() {
   app.listen(PORT, () => {
     console.log(`Ring dashboard running at http://localhost:${PORT}`);
   });
+
+  // Start the periodic status tick (covers Ring health updates that arrive via
+  // background polling) and the keep-alive heartbeat.
+  liveUpdates.start();
 }
 
 main().catch((error) => {

@@ -205,6 +205,7 @@ The dashboard includes:
 - Local activity history
 - Synthetic test event button
 - Optional username/password login
+- Live updates (no page refresh)
 
 Synthetic test events are fake local events used to test the dashboard UI. They are not Ring source-of-truth data.
 
@@ -245,6 +246,16 @@ Create a synthetic test activity:
 ```http
 POST /api/activity/test
 ```
+
+Live update stream (Server-Sent Events):
+
+```http
+GET /api/events
+```
+
+The dashboard subscribes to this stream and updates itself when device status
+or activity changes, instead of polling on a timer. Each message carries the
+full dashboard payload (health, status, activity, snapshots).
 
 Debug camera payload:
 

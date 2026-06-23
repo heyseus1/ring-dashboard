@@ -653,6 +653,20 @@ function switchTab(tabName) {
     ?.classList.add("active");
 }
 
+function applyDashboard({ health, status, activity, snapshots }) {
+  lastDashboardData = { health, status, activity, snapshots };
+
+  renderSummaryCards(health, status, snapshots);
+  renderHealth(health, status, snapshots);
+  renderWarnings(status);
+  renderRecentActivity(activity);
+  renderLatestSnapshot(snapshots);
+  renderCameraStatus(status);
+  renderChimeStatus(status);
+  renderActivity(activity);
+  renderSnapshotGallery(snapshots);
+}
+
 async function loadDashboard() {
   try {
     const [health, status, activity, snapshots] = await Promise.all([
@@ -662,17 +676,7 @@ async function loadDashboard() {
       getJson("/api/snapshots"),
     ]);
 
-    lastDashboardData = { health, status, activity, snapshots };
-
-    renderSummaryCards(health, status, snapshots);
-    renderHealth(health, status, snapshots);
-    renderWarnings(status);
-    renderRecentActivity(activity);
-    renderLatestSnapshot(snapshots);
-    renderCameraStatus(status);
-    renderChimeStatus(status);
-    renderActivity(activity);
-    renderSnapshotGallery(snapshots);
+    applyDashboard({ health, status, activity, snapshots });
   } catch (error) {
     console.error(error);
 
@@ -802,6 +806,39 @@ async function initAuthControls() {
   }
 }
 
+function connectLiveUpdates() {
+  if (typeof EventSource === "undefined") {
+    // Older browsers without SSE: fall back to the original polling.
+    setInterval(loadDashboard, 5000);
+    return;
+  }
+
+  const source = new EventSource("/api/events");
+
+  source.addEventListener("dashboard", (event) => {
+    try {
+      applyDashboard(JSON.parse(event.data));
+    } catch (error) {
+      console.error("Failed to apply live update:", error);
+    }
+  });
+
+  source.onerror = () => {
+    // EventSource reconnects on its own for transient drops. If the session
+    // has expired, the reconnect will be unauthorized — detect that and send
+    // the user to the login page instead of retrying forever.
+    fetch("/api/auth/status")
+      .then((res) => res.json())
+      .then((status) => {
+        if (status.enabled && !status.authenticated) {
+          source.close();
+          redirectToLogin();
+        }
+      })
+      .catch(() => {});
+  };
+}
+
 initAuthControls();
 loadDashboard();
-setInterval(loadDashboard, 5000);
+connectLiveUpdates();
