@@ -38,6 +38,7 @@ export type AuthConfig =
       username: string;
       passwordHash: string;
       secureCookie: boolean;
+      apiToken: string | null;
     };
 
 // ---------------------------------------------------------------------------
@@ -130,8 +131,9 @@ export async function loadAuthConfig(): Promise<AuthConfig> {
   }
 
   const secureCookie = process.env.AUTH_COOKIE_SECURE === "true";
+  const apiToken = process.env.AUTH_API_TOKEN?.trim() || null;
 
-  return { enabled: true, username, passwordHash, secureCookie };
+  return { enabled: true, username, passwordHash, secureCookie, apiToken };
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +255,18 @@ function buildClearCookie(
 
 function wantsHtml(req: Request): boolean {
   return req.method === "GET" && req.accepts(["html", "json"]) === "html";
+}
+
+/** Extract a Bearer token from the Authorization header, if present. */
+function getBearerToken(req: Request): string | null {
+  const header = req.headers.authorization;
+
+  if (typeof header !== "string") {
+    return null;
+  }
+
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  return match ? match[1].trim() : null;
 }
 
 function clientKey(req: Request): string {
@@ -413,7 +427,25 @@ export function installAuth(
     res.json({ ok: true });
   });
 
+  if (enabledConfig.apiToken) {
+    console.log(
+      "[auth] Service API token enabled (clients may send Authorization: Bearer <token>)."
+    );
+  }
+
   const requireAuth = (req: Request, res: Response, next: NextFunction) => {
+    // Service token: for trusted local machine clients (e.g. the Sense HAT
+    // agent) that can't hold a browser session cookie.
+    if (enabledConfig.apiToken) {
+      const presented = getBearerToken(req);
+
+      if (presented && timingSafeStringEqual(presented, enabledConfig.apiToken)) {
+        (req as Request & { user?: string }).user = "service-token";
+        next();
+        return;
+      }
+    }
+
     const cookies = parseCookies(req.headers.cookie);
     const token = cookies[SESSION_COOKIE];
     const session = getSession(token);
